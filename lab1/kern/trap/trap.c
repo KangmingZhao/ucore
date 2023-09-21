@@ -113,13 +113,16 @@ void interrupt_handler(struct trapframe *tf) {
             * (4)判断打印次数，当打印次数为10时，调用<sbi.h>中的关机函数关机
             */
             clock_set_next_event();//设置时钟中断
-            if(++ticks%TICK_NUM==0){
+        
+            if (++ticks % TICK_NUM == 0) {
                 print_ticks();
+                __asm__ volatile ("ebreak");//为了观察断点异常是否能正常输出，我们在这里打印ticks的同时触发一个ebreak指令。
+                __asm__ volatile ("mret");//为了观察违法指令异常是否能正常输出，我们在这里打印ticks的同时触发一个mret指令。
                 num++;
                 if(num==10)
                 {
                     sbi_shutdown();
-                }
+            }
             }
             break;
         case IRQ_H_TIMER:
@@ -154,19 +157,28 @@ void exception_handler(struct trapframe *tf) {
             break;
         case CAUSE_ILLEGAL_INSTRUCTION:
              // 非法指令异常处理
-             /* LAB1 CHALLENGE3   YOUR CODE :  */
+             /* LAB1 CHALLENGE3 */
             /*(1)输出指令异常类型（ Illegal instruction）
              *(2)输出异常指令地址
              *(3)更新 tf->epc寄存器
             */
+            //当前指令
+            cprintf("Illegal instruction at 0x%016llx\n", tf->epc);
+            cprintf("Exception type:Illegal instruction\n");
+            //RISC - V 中的 mret 指令通常是 4 字节长（32位），所以要+4.
+            tf->epc += 4;
             break;
         case CAUSE_BREAKPOINT:
             //断点异常处理
-            /* LAB1 CHALLLENGE3   YOUR CODE :  */
+            /* LAB1 CHALLLENGE3 */
             /*(1)输出指令异常类型（ breakpoint）
              *(2)输出异常指令地址
              *(3)更新 tf->epc寄存器
             */
+            cprintf("ebreak caught at 0x%016llx\n", tf->epc);
+            cprintf("Exception type: breakpoint\n");
+            //我们实验中RISC - V 中的 ebreak 指令通常是 2 字节长（16位），所以要+2而不是+4.
+            tf->epc += 2;
             break;
         case CAUSE_MISALIGNED_LOAD:
             break;
