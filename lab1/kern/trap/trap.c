@@ -106,27 +106,21 @@ void interrupt_handler(struct trapframe *tf) {
             // In fact, Call sbi_set_timer will clear STIP, or you can clear it
             // directly.
             // cprintf("Supervisor timer interrupt\n");
-<<<<<<< HEAD
-             /* LAB1 EXERCISE2   YOUR CODE : 2110937 */
-=======
-             /* LAB1 EXERCISE2   YOUR CODE :  */
->>>>>>> 1c937f3098670d7c330956ccee1d80c6f778cf51
+             /* LAB1 EXERCISE2   YOUR CODE : 2110937 2110935 2110697 */
             /*(1)设置下次时钟中断- clock_set_next_event()
              *(2)计数器（ticks）加一
              *(3)当计数器加到100的时候，我们会输出一个`100ticks`表示我们触发了100次时钟中断，同时打印次数（num）加一
             * (4)判断打印次数，当打印次数为10时，调用<sbi.h>中的关机函数关机
             */
-<<<<<<< HEAD
-            clock_set_next_event();
+            clock_set_next_event();//设置时钟中断
             if(++ticks%TICK_NUM==0){
                 print_ticks();
-                if(ticks==1000)
+                num++;
+                if(num==10)
                 {
                     sbi_shutdown();
                 }
             }
-=======
->>>>>>> 1c937f3098670d7c330956ccee1d80c6f778cf51
             break;
         case IRQ_H_TIMER:
             cprintf("Hypervisor software interrupt\n");
