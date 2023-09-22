@@ -21,7 +21,7 @@
 ## 三、实验步骤与过程
 ### 1.结合 gdb 和 qemu 调试实验文件，完成练习1
 使用Makefile 中的 make debug 和 make gdb 指令，（*如果不先debug会出现如下的connect time out情况*）
-![Alt text](image.png)
+![Alt text](lab0.5-1.png)
 正确调试后，我们首先使用指令x/10i $pc，显示即将执行的 10 条汇编指令，可以观察到如下的0x1000处开始后的十条指令
 ```
 0x1000:	auipc	t0, 0x0       // 将当前地址的高20位与偏移量0x0相加，存储在寄存器t0中
@@ -66,7 +66,7 @@ Bootloader的位置为0x80000000，此时Bootloader将加载操作系统内核�
 ~~~
 
 接下来我们在0x80200000处打断点，然后continue执行到断点处，然后就启动了QEMU预先加载好的内核镜像。
-![Alt text](image-1.png)
+![Alt text](lab0.5-2.png)
 
 
 
