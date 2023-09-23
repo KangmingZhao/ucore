@@ -22,6 +22,7 @@
                 {
                     sbi_shutdown();
                 }
+            }
 
 - 实现过程：
 
@@ -37,7 +38,7 @@
         这样就设置好了下一次的时钟中断。
 
 
-    2.ticks每次都会增加1，如果其能够模TICK_NUM(100)为0，则会打印输出调用print_ticks打印100 ticks同时num自增1，当num=10即打印10次后调用sbi_shutdown进行关机。
+    2.ticks每次都会增加1，如果其能够模TICK_NUM(100)为0，则会打印输出调用print_ticks打印100 ticks。同时num自增1，当num=10即打印10次后调用sbi_shutdown进行关机。
 
 ## 扩展练习 Challenge1：
     回答：描述ucore中处理中断异常的流程（从异常的产生开始），其中mov a0，sp的目的是什么？SAVE_ALL中寄寄存器保存在栈中的位置是什么确定的？对于任何中断，__alltraps 中都需要保存所有寄存器吗？请说明理由。
@@ -132,7 +133,7 @@ if (++ticks % TICK_NUM == 0) {
  ![Alt text](image-3.png)
 
 于是我们继续查阅资料，发现我们现在实验中使用的指令集经过了“压缩”，这里的ebreak指令实际上是c.ebreak,指令长度实际上缩减为2字节（16位）。
- ![Alt text](image-4.png)
+![Alt text](image-4.png)
 于是我们终于得出对非法指令异常，给tf->epc寄存器的值加4；而对断点异常操作，给tf->epc寄存器的值加2。
 
 最终打印是地址也验证了我们更改的正确性，我们实验中，断点异常的下一条指令就是非法指令异常，而结果显示ebreak caught at 0x0000000080200468，Illegal instruction at 0x000000008020046a。这两个地址差2字节，这说明ebreak指令确实长为2字节。
