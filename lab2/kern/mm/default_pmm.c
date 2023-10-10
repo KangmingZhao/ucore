@@ -82,6 +82,7 @@ default_init_memmap(struct Page *base, size_t n) {
         list_entry_t* le = &free_list;
         while ((le = list_next(le)) != &free_list) {
             struct Page* page = le2page(le, page_link);
+            //这里就是定义了一个结构体指针，其实指的是，合适的页
             if (base < page) {
                 list_add_before(le, &(base->page_link));
                 break;
@@ -95,11 +96,14 @@ default_init_memmap(struct Page *base, size_t n) {
 static struct Page *
 default_alloc_pages(size_t n) {
     assert(n > 0);
+    //如果你要分配的页数大于空闲页数 直接886
     if (n > nr_free) {
         return NULL;
     }
+
     struct Page *page = NULL;
     list_entry_t *le = &free_list;
+    // 寻找合适的空闲块
     while ((le = list_next(le)) != &free_list) {
         struct Page *p = le2page(le, page_link);
         if (p->property >= n) {
@@ -126,6 +130,7 @@ static void
 default_free_pages(struct Page *base, size_t n) {
     assert(n > 0);
     struct Page *p = base;
+    //将需要释放的页设为空闲状态
     for (; p != base + n; p ++) {
         assert(!PageReserved(p) && !PageProperty(p));
         p->flags = 0;
@@ -134,7 +139,7 @@ default_free_pages(struct Page *base, size_t n) {
     base->property = n;
     SetPageProperty(base);
     nr_free += n;
-
+    //空闲块的合并
     if (list_empty(&free_list)) {
         list_add(&free_list, &(base->page_link));
     } else {

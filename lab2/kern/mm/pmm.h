@@ -14,27 +14,31 @@
 // XXX_pmm_manager can be used
 // by ucore to manage the total physical memory space.
 struct pmm_manager {
-    const char *name;  // XXX_pmm_manager's name
+    const char *name;  // 管理器名称
     void (*init)(
         void);  // initialize internal description&management data structure
+       
+       
                 // (free block list, number of free block) of XXX_pmm_manager
+    // 设置初始化可管理的内存空间
     void (*init_memmap)(
         struct Page *base,
         size_t n);  // setup description&management data structcure according to
                     // the initial free physical memory space
     struct Page *(*alloc_pages)(
         size_t n);  // allocate >=n pages, depend on the allocation algorithm
+    // 释放自base起的连续n个物理页
     void (*free_pages)(struct Page *base, size_t n);  // free >=n pages with
                                                       // "base" addr of Page
                                                       // descriptor
-                                                      // structures(memlayout.h)
+    // 返回剩余空闲页数                                                  // structures(memlayout.h)
     size_t (*nr_free_pages)(void);  // return the number of free pages
     void (*check)(void);            // check the correctness of XXX_pmm_manager
 };
 
 extern const struct pmm_manager *pmm_manager;
 
-void pmm_init(void);
+void pmm_init(void); //调用init pmm mangaer进行初始化 
 
 struct Page *alloc_pages(size_t n);
 void free_pages(struct Page *base, size_t n);
