@@ -19,19 +19,165 @@ Runtime SBI Version    : 0.1
 
 PMP0: 0x0000000080000000-0x000000008001ffff (A)
 PMP1: 0x0000000000000000-0xffffffffffffffff (A,R,W,X)
-(THU.CST) os is loading ...
+(NKU.CST) os is loading ...
 Special kernel symbols:
   entry  0xffffffffc0200036 (virtual)
-  etext  0xffffffffc0201ad6 (virtual)
-  edata  0xffffffffc0206010 (virtual)
-  end    0xffffffffc0206470 (virtual)
-Kernel executable memory footprint: 26KB
-memory management: best_fit_pmm_manager
+  etext  0xffffffffc020161c (virtual)
+  edata  0xffffffffc0205010 (virtual)
+  end    0xffffffffc02a7638 (virtual)
+Kernel executable memory footprint: 670KB
+memory management: buddy_system_pmm_manager
 physcial memory map:
   memory: 0x0000000007e00000, [0x0000000080200000, 0x0000000087ffffff].
+initmmp
+n=16
+fix=16
+new_tree
+16
+new_tree succeed
+init_mmp_succeed
+alloc_pages
+buddy_alloc
+1
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+alloc_pages succeed
+alloc_pages
+buddy_alloc
+1
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+alloc_pages succeed
+alloc_pages
+buddy_alloc
+1
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+alloc_pages succeed
+alloc_pages
+buddy_alloc
+1
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+alloc_pages succeed
+free_page
+free_page succeed
+free_page
+free_page succeed
+free_page
+free_page succeed
+free_page
+free_page succeed
+*******************************Check begin***************************
+Print buddy:
+16 
+8 8 
+4 4 4 4 
+2 2 2 2 2 2 2 2 
+1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 
+---------------------------
+alloc_pages
+buddy_alloc
+4
+buddy_alloc succeed
+buddy_alloc succeed
+alloc_pages succeed
+Print buddy:
+8 
+4 8 
+0 4 4 4 
+2 2 2 2 2 2 2 2 
+1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 
+---------------------------
+alloc_pages
+buddy_alloc
+8
+buddy_alloc succeed
+alloc_pages succeed
+Print buddy:
+4 
+4 0 
+0 4 4 4 
+2 2 2 2 2 2 2 2 
+1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 
+---------------------------
+alloc_pages
+buddy_alloc
+1
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+alloc_pages succeed
+Print buddy:
+2 
+2 0 
+0 2 4 4 
+2 2 1 2 2 2 2 2 
+1 1 1 1 0 1 1 1 1 1 1 1 1 1 1 1 
+---------------------------
+alloc_pages
+buddy_alloc
+2
+buddy_alloc succeed
+buddy_alloc succeed
+buddy_alloc succeed
+alloc_pages succeed
+Print buddy:
+1 
+1 0 
+0 1 4 4 
+2 2 1 0 2 2 2 2 
+1 1 1 1 0 1 1 1 1 1 1 1 1 1 1 1 
+---------------------------
+free_page
+free_page succeed
+Print buddy:
+2 
+2 0 
+0 2 4 4 
+2 2 2 0 2 2 2 2 
+1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 
+---------------------------
+free_page
+free_page succeed
+Print buddy:
+4 
+4 0 
+0 4 4 4 
+2 2 2 2 2 2 2 2 
+1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 
+---------------------------
+free_page
+free_page succeed
+Print buddy:
+8 
+8 0 
+4 4 4 4 
+2 2 2 2 2 2 2 2 
+1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 
+---------------------------
+free_page
+free_page succeed
+Print buddy:
+16 
+8 8 
+4 4 4 4 
+2 2 2 2 2 2 2 2 
+1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 
+---------------------------
+********************************Check End****************************
 check_alloc_page() succeeded!
-satp virtual address: 0xffffffffc0205000
-satp physical address: 0x0000000080205000
+satp virtual address: 0xffffffffc0204000
+satp physical address: 0x0000000080204000
 ++ setup timer interrupts
 100 ticks
 100 ticks

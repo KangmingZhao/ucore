@@ -139,7 +139,8 @@ default_free_pages(struct Page *base, size_t n) {
     base->property = n;
     SetPageProperty(base);
     nr_free += n;
-    //空闲块的合并
+    /* 空闲块的合并 相邻的空间，将高地址的块合并到低地址的空闲块中，删除被合并的块，并重新设置空闲块
+的第一页的property，最后由于空闲链表按地址空间由低到高排列空闲块，还需要找到插入的位置*/
     if (list_empty(&free_list)) {
         list_add(&free_list, &(base->page_link));
     } else {

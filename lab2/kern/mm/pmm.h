@@ -69,7 +69,7 @@ size_t nr_free_pages(void); // number of free pages
  * KADDR - takes a physical address and returns the corresponding kernel virtual
  * address. It panics if you pass an invalid physical address.
  * */
-/*
+
 #define KADDR(pa)                                                \
     ({                                                           \
         uintptr_t __m_pa = (pa);                                 \
@@ -79,7 +79,7 @@ size_t nr_free_pages(void); // number of free pages
         }                                                        \
         (void *)(__m_pa + va_pa_offset);                         \
     })
-*/
+
 extern struct Page *pages;
 extern size_t npage;
 extern const size_t nbase;
@@ -112,6 +112,16 @@ static inline struct Page *pa2page(uintptr_t pa) {
     }
     return &pages[PPN(pa) - nbase];
 }
+static inline void *
+page2kva(struct Page *page) {
+    return KADDR(page2pa(page));
+}
+
+static inline struct Page *
+kva2page(void *kva) {
+    return pa2page(PADDR(kva));
+}
+
 static inline void flush_tlb() { asm volatile("sfence.vm"); }
 extern char bootstack[], bootstacktop[]; // defined in entry.S
 
