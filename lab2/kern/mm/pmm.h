@@ -76,6 +76,15 @@ size_t nr_free_pages(void); // number of free pages
         (void *)(__m_pa + va_pa_offset);                         \
     })
 */
+#define KADDR(pa)                                                \
+    ({                                                           \
+        uintptr_t __m_pa = (pa);                                 \
+        size_t __m_ppn = PPN(__m_pa);                            \
+        if (__m_ppn >= npage) {                                  \
+            panic("KADDR called with invalid pa %08lx", __m_pa); \
+        }                                                        \
+        (void *)(__m_pa + va_pa_offset);                         \
+    })
 extern struct Page *pages;
 extern size_t npage;
 extern const size_t nbase;
