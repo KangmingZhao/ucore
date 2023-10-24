@@ -401,11 +401,24 @@ do_pgfault(struct mm_struct *mm, uint_t error_code, uintptr_t addr) {
             //(1）According to the mm AND addr, try
             //to load the content of right disk page
             //into the memory which page managed.
+            // swap_in(mm, addr, &page);
+            // 根据 mm 和 addr，将适当的磁盘页的内容加载到由 page 管理的内存中
+            if (swap_in(mm, addr, &page) != 0) {
+                cprintf("swap_in in do_pgfault failed\n");
+                goto failed;
+            }
             //(2) According to the mm,
             //addr AND page, setup the
             //map of phy addr <--->
             //logical addr
+            // page_insert(mm->pgdir, page, addr, perm);
+            // 建立物理地址（page->phy_addr）与逻辑地址（addr）的映射关系
+            if (page_insert(mm->pgdir, page, addr, perm) != 0) {
+                cprintf("page_insert in do_pgfault failed\n");
+                goto failed;
+            }
             //(3) make the page swappable.
+            swap_map_swappable(mm, addr, page, 1);
             page->pra_vaddr = addr;
         } else {
             cprintf("no swap_init_ok but ptep is %x, failed\n", *ptep);
