@@ -39,7 +39,8 @@ swap_init(void)
         panic("bad max_swap_offset %08x.\n", max_swap_offset);
      }
 
-     sm = &swap_manager_clock;//use first in first out Page Replacement Algorithm
+     //sm=&swap_manager_fifo;
+    sm = &swap_manager_clock;//use first in first out Page Replacement Algorithm
      int r = sm->init();
      
      if (r == 0)
@@ -82,6 +83,7 @@ int
 swap_out(struct mm_struct *mm, int n, int in_tick)
 {
      int i;
+
      for (i = 0; i != n; ++ i)
      {
           uintptr_t v;
