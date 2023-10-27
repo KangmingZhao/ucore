@@ -41,7 +41,7 @@ swap_init(void)
      }
 
      //sm=&swap_manager_fifo;
-    //sm = &swap_manager_fifo;//use first in first out Page Replacement Algorithm
+    sm = &swap_manager_fifo;//use first in first out Page Replacement Algorithm
     sm= &swap_manager_lru;
      int r = sm->init();
      
