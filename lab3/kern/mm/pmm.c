@@ -245,6 +245,8 @@ pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create) {
      * flags bit : User can access
      */
     pde_t *pdep1 = &pgdir[PDX1(la)];
+    //cprintf("pdep1: \n%p\n",*pdep1);
+
     if (!(*pdep1 & PTE_V)) {
         struct Page *page;
         if (!create || (page = alloc_page()) == NULL) {

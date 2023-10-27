@@ -329,6 +329,9 @@ volatile unsigned int pgfault_num=0;
  */
 int
 do_pgfault(struct mm_struct *mm, uint_t error_code, uintptr_t addr) {
+
+
+
     int ret = -E_INVAL;
     //try to find a vma which include addr
     struct vma_struct *vma = find_vma(mm, addr);
@@ -354,6 +357,18 @@ do_pgfault(struct mm_struct *mm, uint_t error_code, uintptr_t addr) {
 
     ret = -E_NO_MEM;
 
+    // list_entry_t *head=(list_entry_t*) mm->sm_priv;
+    //assert(head != NULL);
+    // list_entry_t *temp=head->next;
+    // while(temp->next!=head)
+    // {
+    //     struct Page *ptr = le2page(temp, pra_page_link);
+    //     pte_t *pte = get_pte(mm ->pgdir, ptr -> pra_vaddr, 0);
+    //     *pte |= PTE_R;
+    //     temp=list_next(temp);//把所有的页的属性改回来
+    // }
+    
+
     pte_t *ptep=NULL;
     /*
     * Maybe you want help comment, BELOW comments can help you finish the code
@@ -374,9 +389,16 @@ do_pgfault(struct mm_struct *mm, uint_t error_code, uintptr_t addr) {
     */
 
 
+
+
     ptep = get_pte(mm->pgdir, addr, 1);  //(1) try to find a pte, if pte's
                                          //PT(Page Table) isn't existed, then
                                          //create a PT.
+
+    //*ptep |= PTE_R;                                     
+
+    cprintf("\n%p\n",*ptep);
+
     if (*ptep == 0) {
         if (pgdir_alloc_page(mm->pgdir, addr, perm) == NULL) {
             cprintf("pgdir_alloc_page in do_pgfault failed\n");
@@ -425,9 +447,20 @@ do_pgfault(struct mm_struct *mm, uint_t error_code, uintptr_t addr) {
             goto failed;
         }
    }
-
    ret = 0;
 failed:
+    cprintf("\n%p\n",pa2page(addr));
+    //*ptep &= (~PTE_R);  
+    //list_entry_t *head=(list_entry_t*) mm->sm_priv;
+    //assert(head != NULL);
+//    temp=head->next;
+//     while(temp->next!=head)
+//     {
+//         struct Page *ptr = le2page(temp, pra_page_link);
+//         pte_t *pte = get_pte(mm ->pgdir, ptr -> pra_vaddr, 0);
+//         *pte &= (~PTE_R);
+//         temp=list_next(temp);//把所有的页的属性改回来
+//     }
     return ret;
 }
 

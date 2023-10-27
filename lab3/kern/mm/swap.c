@@ -2,6 +2,7 @@
 #include <swapfs.h>
 #include <swap_fifo.h>
 #include <swap_clock.h>
+#include <swap_lru.h>
 #include <stdio.h>
 #include <string.h>
 #include <memlayout.h>
@@ -40,7 +41,8 @@ swap_init(void)
      }
 
      //sm=&swap_manager_fifo;
-    sm = &swap_manager_clock;//use first in first out Page Replacement Algorithm
+    //sm = &swap_manager_fifo;//use first in first out Page Replacement Algorithm
+    sm= &swap_manager_lru;
      int r = sm->init();
      
      if (r == 0)
@@ -144,6 +146,7 @@ static inline void
 check_content_set(void)
 {
      *(unsigned char *)0x1000 = 0x0a;
+     cprintf("0x3a\n");
      assert(pgfault_num==1);
      *(unsigned char *)0x1010 = 0x0a;
      assert(pgfault_num==1);
@@ -164,6 +167,7 @@ check_content_set(void)
 static inline int
 check_content_access(void)
 {
+
     int ret = sm->check_swap();
     return ret;
 }
@@ -238,8 +242,9 @@ check_swap(void)
 
      
      pgfault_num=0;
-     
+     //初始化内存空间
      check_content_set();
+     
      assert( nr_free == 0);         
      for(i = 0; i<MAX_SEQ_NO ; i++) 
          swap_out_seq_no[i]=swap_in_seq_no[i]=-1;
@@ -250,10 +255,14 @@ check_swap(void)
          //cprintf("i %d, check_ptep addr %x, value %x\n", i, check_ptep[i], *check_ptep[i]);
          assert(check_ptep[i] != NULL);
          assert(pte2page(*check_ptep[i]) == check_rp[i]);
-         assert((*check_ptep[i] & PTE_V));          
+         assert((*check_ptep[i] & PTE_V));  
+         //cprintf("fuck \n%p\n",*check_ptep[i]);
+         // 把这个修改为只读
+          //*check_ptep[i] &= (~PTE_R);
      }
      cprintf("set up init env for check_swap over!\n");
      // now access the virt pages to test  page relpacement algorithm 
+     // 这个应该是去检验初始化的页表
      ret=check_content_access();
      assert(ret==0);
      
