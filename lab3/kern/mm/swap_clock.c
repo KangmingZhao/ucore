@@ -66,7 +66,7 @@ _clock_map_swappable(struct mm_struct *mm, uintptr_t addr, struct Page *page, in
     // 将页面的visited标志置为1，表示该页面已被访问
     
     list_entry_t *head=mm->sm_priv;
-    // 将页面page插入到页面链表pra_list_head的末尾
+    // 将页面page插入到页面链表pra_list_head的末尾 即头部的前向
     list_add(head->prev,entry);
     // 将页面的visited标志置为1，表示该页面已被访问
     page->visited=1;
