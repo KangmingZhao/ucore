@@ -16,6 +16,197 @@
 描述FIFO页面置换算法下，一个页面从被换入到被换出的过程中，会经过代码里哪些函数/宏的处理（或者说，需要调用哪些函数/宏），并用简单的一两句话描述每个函数在过程中做了什么？（为了方便同学们完成练习，所以实际上我们的项目代码和实验指导的还是略有不同，例如我们将FIFO页面置换算法头文件的大部分代码放在了`kern/mm/swap_fifo.c`文件中，这点请同学们注意）
  - 至少正确指出10个不同的函数分别做了什么？如果少于10个将酌情给分。我们认为只要函数原型不同，就算两个不同的函数。要求指出对执行过程有实际影响,删去后会导致输出结果不同的函数（例如assert）而不是cprintf这样的函数。如果你选择的函数不能完整地体现”从换入到换出“的过程，比如10个函数都是页面换入的时候调用的，或者解释功能的时候只解释了这10个函数在页面换入时的功能，那么也会扣除一定的分数
 
+##--------------------------------------------------------------
+
+先来梳理一下大致流程。假设来了一个虚拟地址的映射请求，我们从分配器拿到一个页。这个页在拿出来之后，它会进入到pra_list_head的链表里。这个东西的容量有上限，当它达到上限后，会采用一定的规则把一些结点换入，然后新来的接入链表中。当某个访问虚拟地址的指令发现想访问的地址映射的page被换到磁盘里后，会采用一定的规则给它从磁盘换入。
+
+
+
+
+我们的fifo交换算法打包成了一个交换管理器swap_manager_fifo。首先在swap的初始化函数中，把默认使用的交换管理器（迫真直译）设定为swap_manager_fifo。其它的是一些基础的和测试例有关的信息的初始化。然后swap_manager_fifo的事实上什么都没有做。
+
+		swap_init(void){
+			 swapfs_init();
+			 if (!(7 <= max_swap_offset &&
+				max_swap_offset < MAX_SWAP_OFFSET_LIMIT)) {
+				panic("bad max_swap_offset %08x.\n", max_swap_offset);
+			 }
+
+			 sm = &swap_manager_fifo;
+			 
+			 int r = sm->init();
+			 if (r == 0) {
+				  swap_init_ok = 1;
+				  cprintf("SWAP: manager = %s\n", sm->name);
+				  check_swap();
+			 }
+			 return r;
+		}
+
+在进入换入换出过程前，我们先来看看一些基础的结构：
+
+vma_struct和mm_struct
+
+	struct vma_struct {
+		struct mm_struct *vm_mm; 
+		uintptr_t vm_start;         
+		uintptr_t vm_end;        
+		uint_t vm_flags;       
+		list_entry_t list_link;  
+	};
+
+	struct mm_struct {
+		list_entry_t mmap_list;        
+		struct vma_struct *mmap_cache; 
+		pde_t *pgdir;                 
+		int map_count;               
+		void *sm_priv;                  
+	};
+	
+	vma_struct是一个用来描述一段连续的虚拟内存地址的*结点*.vm_start与vm_end描述了这段地址的起止位置，list_link是之前我们已经见过好多次的用来连接结构体结点的链表结点。vm_flags是对应的权限。那么vm_mm是什么呢？
+	
+	我们知道，一个page可以有多个虚拟内存空间的映射，但是一段虚拟内存空间只能映射到一个page里头。这是一个多对一的关系。所以在这个情况下，一个page里装的东西会很多，但是我们不希望这种情况出现，于是有了mm_struct。它用mmap_list来把与自己对应的page有映射关系的vma_struct保存下来，用mmap_cache来记录现在正在访问的vma_struct以提高效率，pgdir记录对应的页目录的位置，map_count是总的映射数，sm_priv是一些私人数据。vma_struct里的vm_mm也就是来记录包含它的mm_struct了。
+
+然后我们来看看alloc_page。它的作用是返回那个连续的PGSIZE大小的内存
+
+	struct Page *alloc_pages(size_t n) {
+		struct Page *page = NULL;
+		bool intr_flag;
+
+		while (1) {
+			local_intr_save(intr_flag);
+			{ page = pmm_manager->alloc_pages(n); }
+			local_intr_restore(intr_flag);
+
+			if (page != NULL || n > 1 || swap_init_ok == 0) break;
+
+			extern struct mm_struct *check_mm_struct;
+			swap_out(check_mm_struct, n, 0);
+		}
+		return page;
+	}
+
+当前首先调用local_intr_save函数来保存当前中断状态，并禁用中断。这是为了确保在一系列操作中不会发生中断，以保持原子性。
+
+然后在{}内，用我们上个实验完成的best-fit还是buddy之类的分配器分配一个页给到上一个作用域声明的page里面。这里的{}大概只是一个良好的编程习惯，不需要太在意。
+
+关键是if里的这三个条件。swap_init_ok是在上面的swap_init函数初始化玩swap模块后就会置为1，如果没有初始化完就不用在这里浪费时间了。然后是page。如果page不为空，说明分配成功了，然后可以直接返回了。如果分配的页面数大于1，那么不管有没有分配到页，都直接break了，因为swap_out没法换出多个页面。
+
+
+
+
+现在可以来看看换入过程会经历的swap_in：
+
+		swap_in(struct mm_struct *mm, uintptr_t addr, struct Page **ptr_result)
+		{
+			 struct Page *result = alloc_page();
+			 assert(result!=NULL);
+
+			 pte_t *ptep = get_pte(mm->pgdir, addr, 0);
+			 // cprintf("SWAP: load ptep %x swap entry %d to vaddr 0x%08x, page %x, No %d\n", ptep, (*ptep)>>8, addr, result, (result-pages));
+
+			 int r;
+			 if ((r = swapfs_read((*ptep), result)) != 0)
+			 {
+				assert(r!=0);
+			 }
+			 cprintf("swap_in: load disk swap entry %d with swap_page in vadr 0x%x\n", (*ptep)>>8, addr);
+			 *ptr_result=result;
+			 return 0;
+		}
+		
+		
+注意这里的参数。struct Page **ptr_result。这里是想要在函数体内改变ptr_result指针的传法。
+
+首先断言看看刚刚分配来的result是不是空的。如果是，那么不允许错误的执行下去，不然就相当于什么都没花费就把需要的page换上来了。
+
+使用get_pte拿到页表项。我们知道换入过程发生在访问到一个虚拟的地址，但是映射这块地址的page在磁盘里头，所以要把它从磁盘里捞上来。使用swapfs_read把被换到磁盘的内容存到result里面。这是一个磁盘（伪:D）的读写函数
+
+我们现在关注的这个page，会在链表里随着新的page加入而不断往链表头移动。直到它达到了链表头部……
+
+接下来就看看怎么换出的。
+
+	int
+	swap_out(struct mm_struct *mm, int n, int in_tick)
+	{
+		 int i;
+		 for (i = 0; i != n; ++ i)
+		 {
+			  uintptr_t v;
+			  struct Page *page;
+			  int r = sm->swap_out_victim(mm, &page, in_tick);
+			  if (r != 0) {
+						cprintf("i %d, swap_out: call swap_out_victim failed\n",i);
+					  break;
+			  }          
+
+			  v=page->pra_vaddr; 
+			  pte_t *ptep = get_pte(mm->pgdir, v, 0);
+			  assert((*ptep & PTE_V) != 0);
+
+			  if (swapfs_write( (page->pra_vaddr/PGSIZE+1)<<8, page) != 0) {
+						cprintf("SWAP: failed to save\n");
+						sm->map_swappable(mm, v, page, 0);
+						continue;
+			  }
+			  else {
+						cprintf("swap_out: i %d, store page in vaddr 0x%x to disk swap entry %d\n", i, v, page->pra_vaddr/PGSIZE+1);
+						*ptep = (page->pra_vaddr/PGSIZE+1)<<8;
+						free_page(page);
+			  }
+
+			  tlb_invalidate(mm->pgdir, v);
+		 }
+		 return i;
+	}
+
+
+这里使用swap_out_victim函数找到需要换出去的页，刚刚的声明的野鬼page就变成了要换出去的页。这时候我们拿到这个即将要被换掉的页映射的虚拟地址，然后进入swapfs_write函数。它为什么要有这样的一步操作(page->pra_vaddr/PGSIZE+1)<<8呢？
+
+对page存的虚拟地址（格式为9bit，9bit，9bit，12bit的页内偏移）右移12位（除PGSIZE），得到页号。这里+1我推测是根据起止地址是0和1的区别来做的，方便人类阅读（？因为在swap_offset的判断中，我们比较的是offset是不是大于0，而不是大于等于0）这里左移8位是把它构造成了一个swap_entry_t的格式（24bit的offset和8bit的其他鬼东西。这个offset事实上就是我们现在得到的页号）。接着进入swapfs_write函数，在这里右移8位做成一个offset（也就是刚刚没有左移之前的样子了）我们这里的最大offset只能是最大扇区输（56）/扇区数（页大小/扇区大小=8） = 7。拿offset乘这个page得占用多少扇区（因为我们是的ide是以扇区为单位的，单位大小是512，而一个page是4096，所以一个page得占很多个扇区）就可以得到当前的数据得放在哪个地方。然后就可以调用ide_write_secs把这个page开始的数据写进磁盘了。
+
+这里还得判断成没成功。这个函数在成功执行下来后会返回0.如果没有，那么有可能是在offset的阶段不在(0,7)的范围内，触发了panic("invalid swap_entry_t = %08x.\n", entry);然后打印这个swap_entry_t是违法的，或者是别的异常处理函数。总之，在我们尝试把它写入磁盘失败后，得把它再接回我们内存中可选的用的page链表里（这里直接调用map_swappable接回链表头了。map_swappable的作用就是把传入的page接入mm的链表头）如果返回的是0，那么写入磁盘成功，*ptep = (page->pra_vaddr/PGSIZE+1)<<8;构造一个符合格式的页表项。然后用tlb_invalidate(mm->pgdir, v);flush以下块表。不过这里的实现似乎不是很完善，参数也没用上。
+
+现在，大体的过程已经了解了，来看看一些具体的功能是如何实现的。
+
+首先是swap_out_victim
+
+	_fifo_swap_out_victim(struct mm_struct *mm, struct Page ** ptr_page, int in_tick)
+	{
+		 list_entry_t *head=(list_entry_t*) mm->sm_priv;
+			 assert(head != NULL);
+		 assert(in_tick==0);
+		 /* Select the victim */
+		 //(1)  unlink the  earliest arrival page in front of pra_list_head qeueue
+		 //(2)  set the addr of addr of this page to ptr_page
+		list_entry_t* entry = list_prev(head);
+		if (entry != head) {
+			list_del(entry);
+			*ptr_page = le2page(entry, pra_page_link);
+		} else {
+			*ptr_page = NULL;
+		}
+		return 0;
+	}
+	
+这是fifo的交换器的找到要扔出去的受害者的函数。因为是fifo，所以做的只是一个简单的把链表头卸下来。需要断言这个mm的对应的list_entry_t头不是NULL，否则抛出错误。这里的in_tick推测是异常处理相关，断言如果它正在处理异常啥的就直接抛出错误，否则可以正常把链表头拆下来。
+
+然后是一些细节上的问题。
+
+首先是这个page2pa。它是把page转化为物理地址的函数，在我们get_pte得到页表项的时候要用到。因为它也是一个页面在被换入换出过程中的必经之路，所以来看看它是怎么做的：
+
+	static inline uintptr_t page2pa(struct Page *page) {
+		return page2ppn(page) << PGSHIFT;
+	}
+
+我们知道物理内存由不同形式但是总归是页号的部分和PGSHIFT组成，把page转化为页号后左移PGSHIFT位就是页内偏移为0的物理地址了。那么来看看page2ppn：
+
+	static inline ppn_t page2ppn(struct Page *page) { return page - pages + nbase; }
+
+这里是通过把当前页的地址减去pages头的地址，加上基准偏移量以计算出页号。
+
+
+
 ## 练习2：深入理解不同分页模式的工作原理（思考题）
 get_pte()函数（位于`kern/mm/pmm.c`）用于在页表中查找或创建页表项，从而实现对指定线性地址对应的物理页的访问和映射操作。这在操作系统中的分页机制下，是实现虚拟内存与物理内存之间映射关系非常重要的内容。
 - get_pte()函数中有两段形式类似的代码， 结合sv32，sv39，sv48的异同，解释这两段代码为什么如此相像。
