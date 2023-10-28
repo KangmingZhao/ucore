@@ -124,7 +124,7 @@ vma_struct和mm_struct
 
 使用get_pte拿到页表项。我们知道换入过程发生在访问到一个虚拟的地址，但是映射这块地址的page在磁盘里头，所以要把它从磁盘里捞上来。使用swapfs_read把被换到磁盘的内容存到result里面。这是一个磁盘（伪:D）的读写函数
 
-我们现在关注的这个page，会在链表里随着新的page加入而不断往链表头移动。直到它达到了链表头部……
+我们现在关注的这个page，会在链表里随着新的page加入而不断往链表尾移动。直到它达到了链表尾部……
 
 ## 1.4换出
 
@@ -167,7 +167,7 @@ vma_struct和mm_struct
 
 对page存的虚拟地址（格式为9bit，9bit，9bit，12bit的页内偏移）右移12位（除PGSIZE），得到页号。这里+1我推测是根据起止地址是0和1的区别来做的，方便人类阅读（？因为在swap_offset的判断中，我们比较的是offset是不是大于0，而不是大于等于0）这里左移8位是把它构造成了一个swap_entry_t的格式（24bit的offset和8bit的其他鬼东西。这个offset事实上就是我们现在得到的页号）。接着进入swapfs_write函数，在这里右移8位做成一个offset（也就是刚刚没有左移之前的样子了）我们这里的最大offset只能是最大扇区输（56）/扇区数（页大小/扇区大小=8） = 7。拿offset乘这个page得占用多少扇区（因为我们是的ide是以扇区为单位的，单位大小是512，而一个page是4096，所以一个page得占很多个扇区）就可以得到当前的数据得放在哪个地方。然后就可以调用ide_write_secs把这个page开始的数据写进磁盘了。
 
-这里还得判断成没成功。这个函数在成功执行下来后会返回0.如果没有，那么有可能是在offset的阶段不在(0,7)的范围内，触发了panic("invalid swap_entry_t = %08x.\n", entry);然后打印这个swap_entry_t是违法的，或者是别的异常处理函数。总之，在我们尝试把它写入磁盘失败后，得把它再接回我们内存中可选的用的page链表里（这里直接调用map_swappable接回链表头了。map_swappable的作用就是把传入的page接入mm的链表头）如果返回的是0，那么写入磁盘成功，*ptep = (page->pra_vaddr/PGSIZE+1)<<8;构造一个符合格式的页表项。然后用tlb_invalidate(mm->pgdir, v);flush以下块表。不过这里的实现似乎不是很完善，参数也没用上。
+这里还得判断成没成功。这个函数在成功执行下来后会返回0.如果没有，那么有可能是在offset的阶段不在(0,7)的范围内，触发了panic("invalid swap_entry_t = %08x.\n", entry);然后打印这个swap_entry_t是违法的，或者是别的异常处理函数。总之，在我们尝试把它写入磁盘失败后，得把它再接回我们内存中可选的用的page链表里（这里直接调用map_swappable接回链表了。map_swappable的作用就是把传入的page接入mm的链表头）如果返回的是0，那么写入磁盘成功，*ptep = (page->pra_vaddr/PGSIZE+1)<<8;构造一个符合格式的页表项。然后用tlb_invalidate(mm->pgdir, v);flush以下块表。不过这里的实现似乎不是很完善，参数也没用上。
 
 ## 1.5杂项
 
@@ -193,7 +193,7 @@ vma_struct和mm_struct
 		return 0;
 	}
 	
-这是fifo的交换器的找到要扔出去的受害者的函数。因为是fifo，所以做的只是一个简单的把链表头卸下来。需要断言这个mm的对应的list_entry_t头不是NULL，否则抛出错误。这里的in_tick推测是异常处理相关，断言如果它正在处理异常啥的就直接抛出错误，否则可以正常把链表头拆下来。
+这是fifo的交换器的找到要扔出去的受害者的函数。因为是fifo，所以做的只是一个简单的把链表尾卸下来。需要断言这个mm的对应的list_entry_t头不是NULL，否则抛出错误。这里的in_tick推测是异常处理相关，断言如果它正在处理异常啥的就直接抛出错误，否则可以正常把链表尾拆下来。
 
 然后是一些细节上的问题。
 
@@ -208,6 +208,9 @@ vma_struct和mm_struct
 	static inline ppn_t page2ppn(struct Page *page) { return page - pages + nbase; }
 
 这里是通过把当前页的地址减去pages头的地址，加上基准偏移量以计算出页号。
+
+以及诸如pte2page、pa2page，是把页表项、物理地址转化为页用的。
+
 
 
 
@@ -479,6 +482,55 @@ make grade结果为45/45分，说明实验代码填写正确：
 ## 扩展练习 Challenge：实现不考虑实现开销和效率的LRU页替换算法（需要编程）
 challenge部分不是必做部分，不过在正确最后会酌情加分。需写出有详细的设计、分析和测试的实验报告。完成出色的可获得适当加分。
 
+## 这算是草稿（
+
+lru在数据结构上可以直接改装fifo做好，唯一区别就是lru需要在每次access某个page之后，将他从链表上拆下来，然后重新add到链表的头部。这个操作实际上就是一个把access到的进行更新，思路上非常简单，最大的难点就是我的操作系统怎么在发生一次access之后知道这个是在哪个page里的。
+
+首先在测试时一个经典的access方法是：
+
+	*(unsigned char *)0x1000 = 0x0a;
+	
+怎么做才能让它每次出现这样的访问的时候就把我们的链表按上述方法处理？首先想到的是，既然在访问缺页的时候会产生中断，然后我们可以在缺页函数里进行操作。那么我们可不可以让正常的access也产生中断？
+
+于是我们试图用各种方法找到trap的入口，试图直接修改使得每次访存都会导致中断，但逐渐发现这个应该是cpu的机制，过于底层，并不是我们可以简单的在c文件里修改出来的。
+
+于是我们退而求其次的，试图通过修改页表项的权限为不可读不可写，以使得在每次访存时都会产生权限导致的错误。这样做虽然我们可以简单的获得对每个访存处理的机会，但是会导致整个操作系统都需要进行大修以应对每个page都不可读不可写导致的错误，最终也不得已放弃了。
+
+为了实现上述两种想法，我们把代码翻了个底朝天，但是没有找到合适的解决方法。于是只能采用并不太合乎规则的方法，在check的时候手动在每次访存后面添加处理函数。这样做只能是验证算法思路的正确性，并不是一个实现了的lru。具体函数是：
+
+		
+	void lru_reset(struct mm_struct* mm, uintptr_t addr)
+	{
+	//cprintf("\n\nvvvvvvvvvvvvvvvvvvvvvvvvvvv\n");
+    list_entry_t* head = (list_entry_t*)mm->sm_priv;
+    list_entry_t* le = head;
+
+    pte_t* temp_ptep = NULL;
+    temp_ptep = get_pte(boot_pgdir, addr, 0);
+    struct Page* p = pte2page(*temp_ptep);
+    //cprintf("%p\n", p);
+
+    while ((le = list_next(le)) != head){
+        //cprintf("%p ", le2page(le, pra_page_link));
+        if (le2page(le, pra_page_link) == p)
+        {
+            list_del(&p->pra_page_link);
+            list_add(head, &p->pra_page_link);
+            break;
+        }
+
+    }
+    //cprintf("\nAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n");
+}
+
+我们会在这种情况下调用这个函数：
+
+	cprintf("write Virt Page c in fifo_check_swap\n");
+    *(unsigned char *)0x3000 = 0x0c;
+    lru_reset(mm, (unsigned char*)0x3000);
+    assert(pgfault_num==4);
+
+我们的lru在理想的情况下应该每次访存后遍历内存中的page链表。如果目标page存在于链表中，那么我们把它拆下来然后重新接回链表，改变顺序。如果不在链表里，那么这个函数实际上不会有任何动作，缺页处理交给正常的缺页函数。
 
 
 
