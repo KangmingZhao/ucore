@@ -209,6 +209,9 @@ vma_struct和mm_struct
 
 这里是通过把当前页的地址减去pages头的地址，加上基准偏移量以计算出页号。
 
+以及诸如pte2page、pa2page，是把页表项、物理地址转化为页用的。
+
+
 
 
 ## 练习2：深入理解不同分页模式的工作原理（思考题）
@@ -479,6 +482,55 @@ make grade结果为45/45分，说明实验代码填写正确：
 ## 扩展练习 Challenge：实现不考虑实现开销和效率的LRU页替换算法（需要编程）
 challenge部分不是必做部分，不过在正确最后会酌情加分。需写出有详细的设计、分析和测试的实验报告。完成出色的可获得适当加分。
 
+## 这算是草稿（
+
+lru在数据结构上可以直接改装fifo做好，唯一区别就是lru需要在每次access某个page之后，将他从链表上拆下来，然后重新add到链表的头部。这个操作实际上就是一个把access到的进行更新，思路上非常简单，最大的难点就是我的操作系统怎么在发生一次access之后知道这个是在哪个page里的。
+
+首先在测试时一个经典的access方法是：
+
+	*(unsigned char *)0x1000 = 0x0a;
+	
+怎么做才能让它每次出现这样的访问的时候就把我们的链表按上述方法处理？首先想到的是，既然在访问缺页的时候会产生中断，然后我们可以在缺页函数里进行操作。那么我们可不可以让正常的access也产生中断？
+
+于是我们试图用各种方法找到trap的入口，试图直接修改使得每次访存都会导致中断，但逐渐发现这个应该是cpu的机制，过于底层，并不是我们可以简单的在c文件里修改出来的。
+
+于是我们退而求其次的，试图通过修改页表项的权限为不可读不可写，以使得在每次访存时都会产生权限导致的错误。这样做虽然我们可以简单的获得对每个访存处理的机会，但是会导致整个操作系统都需要进行大修以应对每个page都不可读不可写导致的错误，最终也不得已放弃了。
+
+为了实现上述两种想法，我们把代码翻了个底朝天，但是没有找到合适的解决方法。于是只能采用并不太合乎规则的方法，在check的时候手动在每次访存后面添加处理函数。这样做只能是验证算法思路的正确性，并不是一个实现了的lru。具体函数是：
+
+		
+	void lru_reset(struct mm_struct* mm, uintptr_t addr)
+	{
+	//cprintf("\n\nvvvvvvvvvvvvvvvvvvvvvvvvvvv\n");
+    list_entry_t* head = (list_entry_t*)mm->sm_priv;
+    list_entry_t* le = head;
+
+    pte_t* temp_ptep = NULL;
+    temp_ptep = get_pte(boot_pgdir, addr, 0);
+    struct Page* p = pte2page(*temp_ptep);
+    //cprintf("%p\n", p);
+
+    while ((le = list_next(le)) != head){
+        //cprintf("%p ", le2page(le, pra_page_link));
+        if (le2page(le, pra_page_link) == p)
+        {
+            list_del(&p->pra_page_link);
+            list_add(head, &p->pra_page_link);
+            break;
+        }
+
+    }
+    //cprintf("\nAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n");
+}
+
+我们会在这种情况下调用这个函数：
+
+	cprintf("write Virt Page c in fifo_check_swap\n");
+    *(unsigned char *)0x3000 = 0x0c;
+    lru_reset(mm, (unsigned char*)0x3000);
+    assert(pgfault_num==4);
+
+我们的lru在理想的情况下应该每次访存后遍历内存中的page链表。如果目标page存在于链表中，那么我们把它拆下来然后重新接回链表，改变顺序。如果不在链表里，那么这个函数实际上不会有任何动作，缺页处理交给正常的缺页函数。
 
 
 
