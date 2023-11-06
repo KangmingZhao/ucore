@@ -315,31 +315,66 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     //    5. insert proc_struct into hash_list && proc_list
     //    6. call wakeup_proc to make the new child process RUNNABLE
     //    7. set ret vaule using child proc's pid
-    proc = alloc_proc();
-    if (proc == NULL) {
-    	goto fork_out;
-    }
-    proc->parent = current;
-    if (setup_kstack(proc) != 0) {
-    	goto bad_fork_cleanup_proc;
-    }
-    if (copy_mm(clone_flags, proc) != 0) {
-    	goto bad_fork_cleanup_kstack;
-    }
+        if ((proc = alloc_proc()) == NULL)
+        goto fork_out;
 
-    // Copy parent's trapframe
-    // Also set syscall (exec/fork) return value to be 0.
+
+
+    if (setup_kstack(proc) == -E_NO_MEM)
+        goto bad_fork_cleanup_proc;
+
+    if (copy_mm(clone_flags, proc) != 0)
+        goto bad_fork_cleanup_kstack;
+
+
+    proc->parent = current;
+
+    //好好研究一下为什么这个机掰stack是esp。
+    //这里的是父进程的stack pointer（上方注释），也就是栈指针，我们大致是可以把它当作esp使的。
     copy_thread(proc, stack, tf);
 
-    bool intr_flag;
-    local_intr_save(intr_flag);
+
+    //local_intr_save 的作用是保护一段关键代码，确保它在执行时不会被中断打断。芝士操作系统内核和多任务环境中的常用诡计
+    //我们知道，hash_proc函数因为涉及到对公共链表的修改，所以可能会导致所有被并行殴打过的人产生的ptsd：竞争问题。
+    // 
+    // 这里的多进程似乎只是多个进程在不断地切换，但是每次都只有一个进程在工作（实验手册：然后在通过调度器（scheduler）
+    // 来让不同的内核线程在不同的时间段占用CPU执行，实现对CPU的分时共享）。这个算法叫做优先级轮转调度
+    // 
+    // 
+    // 所以如果当有一个进程插链表插到一半突然被打断，下个进程说：兄弟该我了！那么就尴尬了
+    // 
+    // 这里调用local_intr_save禁止中断可以避免竞争的发生。
+    /*
+    看看它的关联部分：
+
+    void intr_disable(void) { clear_csr(sstatus, SSTATUS_SIE); } //这个操作是禁止中断
+
+    static inline bool __intr_save(void) {
+    if (read_csr(sstatus) & SSTATUS_SIE) {
+        intr_disable();
+        return 1;
+    }
+    return 0;
+    }
+    这里判断当前是否禁止了中断，如果没禁止，那么禁止中断然后返回1，如果已经禁止了那么直接返回0.
+
+    #define local_intr_save(x) \
+    do {                   \
+        x = __intr_save(); \
+    } while (0)
+    这里的do-while似乎只是一种可以帮助减少错误的高级技巧。
+    */
+    //于是，可以这么写：
+    bool interrupt_forbidden;
+    local_intr_save(interrupt_forbidden);
     {
         proc->pid = get_pid();
         hash_proc(proc);
-        list_add(&proc_list, &(proc->list_link));
-        nr_process ++;
+        list_add(&proc_list, &proc->list_link);
+        nr_process++;
     }
-    local_intr_restore(intr_flag);
+    //local_intr_restore就很明了了，如果原来是关着的那么就重新关着，如果本来是开着的那么就打开
+    local_intr_restore(interrupt_forbidden);
 
     wakeup_proc(proc);
 
