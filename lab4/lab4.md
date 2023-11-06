@@ -49,5 +49,49 @@ proc_run用于将指定的进程切换到CPU上运行。它的大致执行步骤
 
 如果可以得到如 附录A所示的显示内容（仅供参考，不是标准答案输出），则基本正确。
 
+补充后的`proc_run`函数如下：
+```c
+void
+proc_run(struct proc_struct *proc) {
+    if (proc != current) {
+        // LAB4:EXERCISE3 YOUR CODE
+        /*
+        * Some Useful MACROs, Functions and DEFINEs, you can use them in below implementation.
+        * MACROs or Functions:
+        *   local_intr_save():        Disable interrupts
+        *   local_intr_restore():     Enable Interrupts
+        *   lcr3():                   Modify the value of CR3 register
+        *   switch_to():              Context switching between two processes
+        */
+        bool intr_flag;
+        struct proc_struct *prev = current, *next = proc;
+        local_intr_save(intr_flag);
+        current = proc;
+        lcr3(next->cr3);
+        switch_to(&(prev->context), &(next->context));
+        local_intr_restore(intr_flag);
+    }
+}
+```
+根据注释中的提示，我的代码实现思路如下：
+- 首先在进行上下文切换之前，定义一个bool类型的变量`intr_flag`，用于保存中断状态。
+
+- 然后需要调用`local_intr_save`函数关闭中断，使得在上下文切换之前，中断将被禁止。这可以确保在切换到新进程之前，不会被激活的中断干扰原有进程的执行。并将禁用前的中断状态保存在`intr_flag`变量中。
+
+- 接着将全局变量`current`更新为要切换的进程指针`proc`，表示将当前进程换为要切换到的进程。
+
+- 之后重新加载`CR3`寄存器的值为要切换到的进程（线程）的页目录表的起始地址，完成进程间的页表切换。
+
+- 再然后调用`switch_to`函数完成具体的两个进程（线程）的执行现场切换，即切换各个寄存器，将控制权转移到新的进程（线程）。
+
+- 最后调用`local_intr_restore`函数，将中断状态恢复。
 ## 扩展练习 Challenge：
 说明语句local_intr_save(intr_flag);....local_intr_restore(intr_flag);是如何实现开关中断的？
+
+在进行进程切换的时候，需要避免出现中断干扰这个过程，所以需要在上下文切换期间清除 IF 位屏蔽中断，并且在进程恢复执行后恢复 IF 位。
+
+- 该语句的左右是关闭中断，使得在这个语句块内的内容不会被中断打断，是一个原子操作；
+
+- 这就使得某些关键的代码不会被打断，从而不会一起不必要的错误；
+
+- 比如说在 proc_run 函数中，将 current 指向了要切换到的线程，但是此时还没有真正将控制权转移过去，如果在这个时候出现中断打断这些操作，就会出现 current 中保存的并不是正在运行的线程的中断控制块，从而出现错误；
