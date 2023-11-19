@@ -84,15 +84,104 @@ alloc_proc(void) {
 
 - 调用alloc_proc，首先获得一块用户信息块。
 - 为进程分配一个内核栈。
-- 复制原进程的内存管理信息到新进程（但内核线程不必做此事）
+- 返回新进程号- 复制原进程的内存管理信息到新进程（但内核线程不必做此事）
 - 复制原进程上下文到新进程
 - 将新进程添加到进程列表
 - 唤醒新进程
-- 返回新进程号
+
 
 请在实验报告中简要说明你的设计实现过程。请回答如下问题：
 
 - 请说明ucore是否做到给每个新fork的线程一个唯一的id？请说明你的分析和理由。
+
+完善代码如下：
+```c
+int
+do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
+    int ret = -E_NO_FREE_PROC;
+    struct proc_struct *proc;
+    if (nr_process >= MAX_PROCESS) {
+        goto fork_out;
+    }
+    ret = -E_NO_MEM;
+    if ((proc = alloc_proc()) == NULL)
+        goto fork_out;
+    if (setup_kstack(proc) == -E_NO_MEM)
+        goto bad_fork_cleanup_proc;
+    if (copy_mm(clone_flags, proc) != 0)
+        goto bad_fork_cleanup_kstack;
+    proc->parent = current;
+    //好好研究一下为什么这个机掰stack是esp。
+    //这里的是父进程的stack pointer（上方注释），也就是栈指针，我们大致是可以把它当作esp使的。
+    copy_thread(proc, stack, tf);
+    //local_intr_save 的作用是保护一段关键代码，确保它在执行时不会被中断打断。芝士操作系统内核和多任务环境中的常用诡计
+    //我们知道，hash_proc函数因为涉及到对公共链表的修改，所以可能会导致所有被并行殴打过的人产生的ptsd：竞争问题。
+    // 这里的多进程似乎只是多个进程在不断地切换，但是每次都只有一个进程在工作（实验手册：然后在通过调度器（scheduler）
+    // 来让不同的内核线程在不同的时间段占用CPU执行，实现对CPU的分时共享）。这个算法叫做优先级轮转调度
+    // 所以如果当有一个进程插链表插到一半突然被打断，下个进程说：兄弟该我了！那么就尴尬了
+    // 
+    // 这里调用local_intr_save禁止中断可以避免竞争的发生。
+    /*
+    看看它的关联部分：
+    void intr_disable(void) { clear_csr(sstatus, SSTATUS_SIE); } //这个操作是禁止中断
+
+    static inline bool __intr_save(void) {
+    if (read_csr(sstatus) & SSTATUS_SIE) {
+        intr_disable();
+        return 1;
+    }
+    return 0;
+    }
+    这里判断当前是否禁止了中断，如果没禁止，那么禁止中断然后返回1，如果已经禁止了那么直接返回0.
+    #define local_intr_save(x) \
+    do {                   \
+        x = __intr_save(); \
+    } while (0)
+    这里的do-while似乎只是一种可以帮助减少错误的高级技巧。
+    */
+    //于是，可以这么写：
+    bool interrupt_forbidden;
+    local_intr_save(interrupt_forbidden);
+    {
+        proc->pid = get_pid();
+        hash_proc(proc);
+        list_add(&proc_list, &proc->list_link);
+        nr_process++;
+    }
+    //local_intr_restore就很明了了，如果原来是关着的那么就重新关着，如果本来是开着的那么就打开
+    local_intr_restore(interrupt_forbidden);
+
+    wakeup_proc(proc);
+
+    ret = proc->pid;
+fork_out:
+    return ret;
+bad_fork_cleanup_kstack:
+    put_kstack(proc);
+bad_fork_cleanup_proc:
+    kfree(proc);
+    goto fork_out;
+}
+
+```
+**设计思路**：
+  为了保证正确性，需要先进性多种判断。同时也要注意对数据冲突的处理。
+- 首先调用 alloc_proc为proc分配一个进程。如果分配失败，那么直接返回“没有空闲进程”的错误代码。
+- 然后调用setup_kstack分配内核栈。如果分配失败，那么首先把刚刚分配的proc释放掉，然后再返回“没有空闲进程”的错误代码。
+- 接着调用copy_mm来复制mm_struct。目前这个函数暂时用不上。至此基本的有效性判断结束，可以开始正式处理了。
+- 将当前子进程的parent指针指向current进程。
+- 调用copy_thread复制线程。这里传入当前进程的stack作为esp，因为stack是栈指针。
+- 比较复杂的地方来了。使用一个bool型变量interrupt_forbidden来记录当前是否禁止中断。调用local_intr_save来禁止中断，同时记录当前中断状态：如果允许中断，那么interrupt_forbidden记为1.方便在这里结束后恢复成原来的那种状态。这里使用local_intr_save和local_intr_restore之间的禁止中断的部分来保护获取pid、hash_proc和添加链表的操作。因为这些操作都是对共享的数据空间进行操作，需要防止进程间的数据冲突。这里中断就可以防止冲突是因为目前的多进程并不是真正意义上的并行执行，而是采取一种优先级轮转调度的算法，每次选取一个进程执行。如果一个进程在操作共享内存时，需要另一个进程进行了然后触发了中断，那么会产生数据冲突。
+- 可以将proc的状态设为PROC_RUNNABLE
+- 最后返回proc的pid。
+
+**问题回答**：
+- 也许这里问的是唯一的pid？：首先我们使用保护区将分配id的部分保护了起来，这样就保证了不会出现在分配id、插入链表时出现异常。而get_pid事实上也足够严谨。首先我们直到pid的存量是线程数的两倍，然后线程在链表中并非按照pid的大小顺序存放的。于是我们用last_pid来记录上一个可用的pid，next_safe来记录比last_pid大但仍是可分配的安全pid。在遍历链表的途中，如果遇到last_pid等于当前已有的进程的pid，那么就++。如果++完后的last_pid大于next_safe，那么从头遍历，同时因为last_pid也增大了所以不会再因为这次导致从头的pid而再次出现这个问题。最终得到的是唯一的pid。
+
+
+
+
+
 ## 练习3：编写proc_run 函数（需要编码）
 proc_run用于将指定的进程切换到CPU上运行。它的大致执行步骤包括：
 
