@@ -643,7 +643,7 @@ load_icode(unsigned char *binary, size_t size) {
     // Keep sstatus
     uintptr_t sstatus = tf->status;
     memset(tf, 0, sizeof(struct trapframe));
-    /* LAB5:EXERCISE1 YOUR CODE
+    /* LAB5:EXERCISE1 2110697段钧淇
      * should set tf->gpr.sp, tf->epc, tf->status
      * NOTICE: If we set trapframe correctly, then the user level process can return to USER MODE from kernel. So
      *          tf->gpr.sp should be user stack top (the value of sp)
@@ -661,7 +661,6 @@ load_icode(unsigned char *binary, size_t size) {
     tf->status = (read_csr(sstatus) & ~SSTATUS_SPP & ~SSTATUS_SPIE);：sstatus 寄存器中的 SPP 位表示当前特权级别，SPIE 位表示之前的特权级别是否启用中断。
     通过清除这两个位，可以确保在切换到用户模式时，特权级别被正确设置为用户模式，并且中断被禁用，以便用户程序可以在预期的环境中执行。
     */
-
     ret = 0;
 out:
     return ret;
