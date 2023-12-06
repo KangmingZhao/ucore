@@ -651,9 +651,16 @@ load_icode(unsigned char *binary, size_t size) {
      *          tf->status should be appropriate for user program (the value of sstatus)
      *          hint: check meaning of SPP, SPIE in SSTATUS, use them by SSTATUS_SPP, SSTATUS_SPIE(defined in risv.h)
      */
-    tf->gpr.sp=USTACKTOP;
-    tf->epc=elf->e_entry;
-    tf->status=(read_csr(sstatus)&~SSTATUS_SPP&~SSTATUS_SPIE);
+    tf->gpr.sp = USTACKTOP; // 设置f->gpr.sp为用户栈的顶部地址
+    tf->epc = elf->e_entry; // 设置tf->epc为用户程序的入口地址
+    tf->status = (read_csr(sstatus) & ~SSTATUS_SPP & ~SSTATUS_SPIE); // 根据需要设置 tf->status 的值，清除 SSTATUS_SPP 和 SSTATUS_SPIE 位
+    /*tf->gpr.sp = USTACKTOP;：在用户模式下，栈通常从高地址向低地址增长，而 USTACKTOP 是用户栈的顶部地址，
+    因此将 tf->gpr.sp 设置为 USTACKTOP 可以确保用户程序在正确的栈空间中运行。
+    tf->epc = elf->e_entry;：elf->e_entry 是可执行文件的入口地址，也就是用户程序的起始地址。
+    通过将该地址赋值给 tf->epc，在执行 mret 指令后，处理器将会跳转到用户程序的入口开始执行。
+    tf->status = (read_csr(sstatus) & ~SSTATUS_SPP & ~SSTATUS_SPIE);：sstatus 寄存器中的 SPP 位表示当前特权级别，SPIE 位表示之前的特权级别是否启用中断。
+    通过清除这两个位，可以确保在切换到用户模式时，特权级别被正确设置为用户模式，并且中断被禁用，以便用户程序可以在预期的环境中执行。
+    */
 
     ret = 0;
 out:
