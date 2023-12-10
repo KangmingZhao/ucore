@@ -346,6 +346,7 @@ void exit_range(pde_t *pgdir, uintptr_t start, uintptr_t end) {
  */
 int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
                bool share) {
+                // 保证页面对齐
     assert(start % PGSIZE == 0 && end % PGSIZE == 0);
     assert(USER_ACCESS(start, end));
     // copy content by page unit.
@@ -362,6 +363,7 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
             if ((nptep = get_pte(to, start, 1)) == NULL) {
                 return -E_NO_MEM;
             }
+            // 复制页面内容 首先拿到页表项 然后
             uint32_t perm = (*ptep & PTE_USER);
             // get page from ptep
             struct Page *page = pte2page(*ptep);
@@ -388,6 +390,9 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
              * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
              * (4) build the map of phy addr of  nage with the linear addr start
              */
+            //首先找到待拷贝的源地址和目的地址，
+            //然后使用memcpy函数复制一个页（每次一个页）的内容至目的地址，
+            //最后建立虚拟地址到物理地址的映射。
             void * kva_src = page2kva(page);
             void * kva_dst = page2kva(npage);
             memcpy(kva_dst, kva_src, PGSIZE);
