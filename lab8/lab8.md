@@ -14,6 +14,262 @@
 ## 练习1: 完成读文件操作的实现（需要编码）
 首先了解打开文件的处理流程，然后参考本实验后续的文件读写操作的过程分析，填写在 kern/fs/sfs/sfs_inode.c中 的sfs_io_nolock()函数，实现读文件中数据的代码。
 
+
+#### 一些关于inode的总结
+
+这个文件系统应该是使用了一段（类似数组的）连续内存来存放很多个4k为单位的block。
+
+block[0]是超块，也就是gxl老师说的一旦这万一坏了那你又获得了一个新砖头了。艹做系统一旦无法找到超级块，那么它后面的根目录啥的都根本不可能找到了。（不是说得从超级块找到莫，可是看起来超级快的数据里面没有相关的情况呀，还是可以直接找到root）
+
+然后是root-dir，block[1]，这个是gxl老师说的一旦这玩意噶了就得花大价钱来扫描整个磁盘空间然后根据关系推断出谁是谁的父亲。
+
+然后有一个类似used_list的东西从第二个块开始，占据核块总数相同的bit数来表示是不是被占用。
+
+此后开始是正常的数据部分，这里好像没有额外的freelist来保证健壮性。
+
+
+我感觉哦，这个sfs_disk_inode的direct是存了很多个块，如果这个b是个文件夹，那么它里面可能存了别的文件夹头的块，或者是直接就是文件头的块。如果这个b是个文件，那么里面就直接是这个文件使用到的所有块。
+
+使用一级间接索引，我的理解是，我能索引12个块，这12个都是具体数据于是是12 * 4k。而我还有个indirect，这玩意指向的block[indirect]是我的额外的索引块，里面的12个全都是索引块，这12个又可以各自索引12个具体的文件数据块，于是再加上12*12*4k
+
+
+
+### 那么从现在开始，进入读文件的流程。
+
+最开始首先从宏观上来梳理一下这次实验的一些相关的东西。一个独写文件的流程，大概是经过：
+
+- 在一个进程调用了相关的库的接口。
+
+- 用户进程下潜到内核调用抽象层的接口。抽象层是为了方便在各种使用不同的文件系统的操作系统中移植代码而使用的一个对上层提供通用接口的层次。
+
+- 从抽象层进入到我们这个操作系统的真正的文件系统。
+
+- 文件系统调用硬盘io接口。
+
+那么现在来看看细节。在内核初始化的时候现在多了个文件系统的初始化。它干了三件事：
+
+- 初始化vfs。这里包括给引导文件系统bootfs的信号量置为1，让它能正常执行然后加载必要项（老师说不被人使用的信号量在这里焕发第二春！）。同时初始化vfs的设备列表，它的对应的信号量也置为1.
+
+- 设备初始化，主要是将这次实验用到的stdin、stdout和磁盘disk0初始化。这里用了一个很神奇的宏来实现对于每个不同的设备都可以调用到比如说dev_init_disk0，也就是对应的初始化函数。
+
+- 初始化sys。这里试图把disk0挂载，使其可以被访问和操作。
+
+
+#### 现在到了具体的打开文件的处理流程了。
+
+1. 通用文件系统访问接口层：
+
+用户态能能做到的仍然只是调用库函数写好的open然后发起系统调用。这里陷入内核态之后将要打开的文件路径和打开方式传给sysfile_open（注意这里是sysfile系统文件不是sfs简单文件系统，一开始我看混了还纳闷怎么直接就跳过vfs进入sfs了），这里首先得把用户空间来的路径字符串复制到内核空间（如果返回的不是0，就说明返回的是-E_INVAL表示复制失败了）复制的时候得把现在的mm的信号量减少说明我正在用这个复制字符串。这里的复制字符串，我认为是因为这个传入的是指针，而这个字符串指针所在的位置是用户空间，在内核空间直接使用这个东西可能会造成一些不安全的影响。总之，在路径处理完毕后，进入file_open函数。在进行一些打开方式的判定后，尝试为这个要打开的文件分配一个file结构体。它的里面存了一些文件的相关状态信息。这里是直接从fd数组里面拿一个出与可用状态FD_NONE的file结构体。我推测fd数组这个机制存在的原因可能是要限制打开文件的上限数。这里的fd应该是索引下标，如果传入的是NO_FD那么随便分配一个，否则返回fd指定的如果是合法的file。然后调用vfs_open进入虚拟接口层
+
+2. vfs：在vfs_open中，
+
+首先上来还是一些打开方式的判定。调用vfs_lookup根据这个传入的路径试图获得一个inode。如果输入的是一个相对路径，那么就试图从当前进程的filesp信息里面拿到当前进程的工作路径作为返回给这个inode，然后直接返回一个-E_NOENT。如果来的是一个device:path格式的，那么找到这个device的根节点同时将path参数的device:部分切掉。如果找的到根那么这个部分返回0.剩下的情况如果是/开头那么就找到系统根目录，否则就是找到当前的路径（可能是个设备，所以拿到它的fs然后返回）
+
+然后进入一个vop_lookup宏。这个宏的作用我推测只是对所有vop操作都进行同样的条件判断，然后对传入的node的in_ops（这是一个node的op操作集合）调用vop_lookup。现在最关键的地方来了。这个vop_lookup，事实上就是sfs_lookup：
+
+```c
+static const struct inode_ops sfs_node_dirops = {
+    .vop_magic                      = VOP_MAGIC,
+    .vop_open                       = sfs_opendir,
+    .vop_close                      = sfs_close,
+    .vop_fstat                      = sfs_fstat,
+    .vop_fsync                      = sfs_fsync,
+    .vop_namefile                   = sfs_namefile,
+    .vop_getdirentry                = sfs_getdirentry,
+    .vop_reclaim                    = sfs_reclaim,
+    .vop_gettype                    = sfs_gettype,
+    .vop_lookup                     = sfs_lookup,
+};
+```
+我们可以看到在文件夹、文件的inode结点被创建时，会经过类似
+```c
+vop_init(node, sfs_get_ops(din->type), info2fs(sfs, sfs));
+```
+的过程。当然以上是sfs的inode结点创建的过程，设备的结点又有别的函数。但是所有的inode要么是sfs_inode，要么是device：
+
+```c
+struct inode {
+    union {
+        struct device __device_info;
+        struct sfs_inode __sfs_inode_info;
+    } in_info;
+	........
+};
+```
+
+
+看到sfs_get_ops(din->type)里就包括了sfs_node_dirops。于是inode结点的函数vop_lookup就可以使用到sfs_lookup。这里实现了vfs到sfs的跳转。
+
+当然现在vfs还没有结束，让我们把目光再回到调用vfs_lookup的地方。这里如果这个文件不存在，我们可以给他创建一个。当进入到vop_create宏时，它所遇到的操作和上述的vop_lookup是一样的。在理解了这一堆vop的宏操作是干什么之后（如果我没理解错的话），我们就可以知道这个过程实际上就是vfs进入到sfs了。
+
+接下来就可以进入vop_open了。然后把一些引用计数进行调整，同时如果需求是创建文件或者截断，那么就可以调用vop_truncate(node, 0)将文件的长度截断为0，相当于重新创建了。具体的vop_open进入到什么地方在下个阶段进行描述。
+
+在以上的人肉深度优先的学习函数调用的过程解释完毕后，这个被打开的文件的node就终于存到了file里，然后这个file的索引fd被返回回去，下次在使用的时候可以直接索引到这个file然后都这个文件了。
+
+3.sfs
+
+对于vop_open函数，如果打开的是一个文件夹，那么经过一系列兜兜转转最终会来到sfs_opendir。如果打开的是一个具体的文件，那么会到sfs_openfile。这两者目前都还没有特别的功能实现，都只是做了正确性判断。
+
+文件的打开流程目前和sfs的联系也就暂时只有这点，后面在分析读写过程的时候我们还会回到这一层来具体探讨一下相关函数。但是现在已经可以比较清楚的清除这一套访问下来的流程了。
+
+4.具体设备
+
+如果仅仅只是找到这个文件的描述符然后把它存起来（打开文件的处理流程），在这个过程中似乎不涉及到具体设备的交互。open操作也断在了sfs里面没有下文了。具体的文件操作在读写时会详细涉及。
+
+#### 现在到了具体的打开文件的处理流程了。
+
+总体的流程大概和前面的open类似。在syscall进入了sysfile_read。在这里首先先file_testfd，看看这个file等是不是可以正常使用。然后分配一个大小为4096的缓冲区供读文件使用。这里的意思是每次最多只能读取一个page大小的内容，然后如果这个文件比4096大那么分批多次读取。文件的需要读取长度是len，文件到每次操作为止实际读取的长度是alen。然后进入到file_read函数。先通过fd2file拿到fd索引的file（也就是我们要读取的文件）。根据读取的长度声明对应的buffer结构体之后，又进入vop环节。这回直接跳转到了sfs的sfs_read函数。从sfs_read进入sfs_io，写入位置为0，意思是正在读。接着又得到文件的信息sfs和索引节点的信息sin。对sin的信号量进行操作，防止在读时这个索引被人修改。在一切准备工作完毕后，调用sfs_io_nolock，也就是ex1由本组的一位大佬完成的填空的部分了：
+
+
+```c
+static int
+sfs_io_nolock(struct sfs_fs *sfs, struct sfs_inode *sin, void *buf, off_t offset, size_t *alenp, bool write) {
+    struct sfs_disk_inode *din = sin->din;
+    assert(din->type != SFS_TYPE_DIR);
+    off_t endpos = offset + *alenp, blkoff;
+    *alenp = 0;
+	// calculate the Rd/Wr end position
+    if (offset < 0 || offset >= SFS_MAX_FILE_SIZE || offset > endpos) {
+        return -E_INVAL;
+    }
+    if (offset == endpos) {
+        return 0;
+    }
+    if (endpos > SFS_MAX_FILE_SIZE) {
+        endpos = SFS_MAX_FILE_SIZE;
+    }
+    if (!write) {
+        if (offset >= din->size) {
+            return 0;
+        }
+        if (endpos > din->size) {
+            endpos = din->size;
+        }
+    }
+
+    int (*sfs_buf_op)(struct sfs_fs *sfs, void *buf, size_t len, uint32_t blkno, off_t offset);
+    int (*sfs_block_op)(struct sfs_fs *sfs, void *buf, uint32_t blkno, uint32_t nblks);
+    if (write) {
+        sfs_buf_op = sfs_wbuf, sfs_block_op = sfs_wblock;
+    }
+    else {
+        sfs_buf_op = sfs_rbuf, sfs_block_op = sfs_rblock;
+    }
+
+    int ret = 0;
+    size_t size, alen = 0;
+    uint32_t ino;
+    uint32_t blkno = offset / SFS_BLKSIZE;          // The NO. of Rd/Wr begin block
+    uint32_t nblks = endpos / SFS_BLKSIZE - blkno;  // The size of Rd/Wr blocks
+
+ 
+  // (1)第一部分，用offset % SFS_BLKSIZE判断是否对齐，
+  // 若没有对齐，则需要特殊处理，首先通过sfs_bmap_load_nolock找到这一块的inode，然后将这部分数据读出。
+    if ((blkoff = offset % SFS_BLKSIZE) != 0) {
+        size = (nblks != 0) ? (SFS_BLKSIZE - blkoff) : (endpos - offset);
+        if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
+            goto out;
+        }
+        if ((ret = sfs_buf_op(sfs, buf, size, ino, blkoff)) != 0) {
+            goto out;
+        }
+
+        alen += size;
+        buf += size;
+
+        if (nblks == 0) {
+            goto out;
+        }
+
+        blkno++;
+        nblks--;
+    }
+
+    if (nblks > 0) {
+        if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
+            goto out;
+        }
+        if ((ret = sfs_block_op(sfs, buf, ino, nblks)) != 0) {
+            goto out;
+        }
+
+        alen += nblks * SFS_BLKSIZE;
+        buf += nblks * SFS_BLKSIZE;
+        blkno += nblks;
+        nblks -= nblks;
+    }
+    if ((size = endpos % SFS_BLKSIZE) != 0) {
+        if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
+            goto out;
+        }
+        if ((ret = sfs_buf_op(sfs, buf, size, ino, 0)) != 0) {
+            goto out;
+        }
+        alen += size;
+    }
+out:
+    *alenp = alen;
+    if (offset + alen > sin->din->size) {
+        sin->din->size = offset + alen;
+        sin->dirty = 1;
+    }
+    return ret;
+}
+
+```
+
+让我们来看看这里做了什么：
+
+- 1、首先明确：offset是上一轮读取结束的为止，alenp是现在需要读取的长度。在这里首先得进行一些是否越界的判断。然后就会引入两个变量，blkno和nblks。它们是作用在sin的direct上的。这时候再回过头看一开始描述的那一段sfs_disk_inode的direct的问题了。现在的blkno和nblks就是根据文件长度和块的大小的对应关系求出来的direct的下标，用来返回一个sfs_disk_inode结点索引的具体数据块。
+
+- 2、读取时，首先要对上一次读取的块是否读取完进行判断。如果offset 不能整除 SFS_BLKSIZE，则得到的余数是上一个被读取的块被读取了多少。拿SFS_BLKSIZE减去这个余数就是上一个块还剩多少需要被读取。
+
+```c
+size = (nblks != 0) ? (SFS_BLKSIZE - blkoff) : (endpos - offset);
+```
+就可以理解了：如果这一轮需要开始读取的块是当前inode索引的第一个块，那么说明上次出现了一些情况导致只读取了这个块的一部分，于是这次要读取的大小就是这个块的剩余部分endpos - offset。如果当前块不是第一个，那么就首先得把上一个块的剩下这么多SFS_BLKSIZE - blkoff数据给读出来。这部分会通过sfs_bmap_load_nolock进入sfs_bmap_get_nolock。这里又有两个类了，一是之前提到过的direct数组中，直接挂在当前inode下的12个具体的数据块，另一个是挂在indirect下的12个索引块。如果现在要取的下标是在12个直接索引块里面，那么直接就看，如果这个块不存在且允许create，那么就在对应的下标处alloc一个，如果存在那可以直接返回回去了。
+
+如果是在indirect里面，那么调用sfs_bmap_get_sub_nolock再找。这里也是在干一些比较相似的事情，时间有限就不在深入了。总之是找到这个indirect的索引块索引的数据库。突然在想如果没有更精妙的递归实现方式的话，文件大小一旦增加，那么是不是就得有很多sfs_bmap_get_sub_nolock、sfs_bmap_get_sub_sub_nolock、sfs_bmap_get_sub_sub_sub_nolock……。再取到数据后，调用sfs_block_op，这里现在在读取，于是sfs_block_op函数就会对应到sfs_rwblock，把需要的东西写入buf缓存中。后面的操作也类似，如果有出现跨块的情况那么就把多出来的部分再次调用sfs_bmap_load_nolock和sfs_block_op的组合把数据写入buffer中。
+
+- 3、这里还得介绍一下sfs与具体设备的联系。刚刚的sfs_rwblock会进入到sfs_rwblock_nolock。它回创建一个io缓冲iobuf，然后使用dop_io的宏。这个宏是定义在设备头文件里的，也就是说现在正式开始进入设备层，与磁盘设备开始交互。这里是要调用刚刚一直传下来的sfs里的设备--磁盘进行d_io操作了。
+
+我们找到磁盘设备的初始化函数：
+
+```c
+static void
+disk0_device_init(struct device *dev) {
+    ......
+	dev->d_io = disk0_io;
+	.......
+}
+
+```
+于是确定了d_io接下来要去到disk0_io了。再disk0_io里，我们读文件会通过disk0_read_blks_nolock和iobuf_move的组合把数据读取到buffer里面。最终传回到sfs层。
+
+
+sfs_io_nolock结束后，调用iobuf_skip跳过刚刚读取的字节的长度的数据。这里暂时没搞清楚是干什么的。至此，读取流程完毕，读取到的数据已经被直接改写再buffer里。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## 练习2: 完成基于文件系统的执行程序机制的实现（需要编码）
 改写proc.c中的load_icode函数和其他相关函数，实现基于文件系统的执行程序机制。执行：make qemu。如果能看看到sh用户程序的执行界面，则基本成功了。如果在sh用户界面上可以执行”ls”,”hello”等其他放置在sfs文件系统中的其他执行程序，则可以认为本实验基本成功。
 
